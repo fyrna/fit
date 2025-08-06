@@ -5,7 +5,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,22 +14,40 @@ import (
 
 var (
 	commitTypes = []string{"feat", "fix", "docs", "style", "refactor", "test", "chore", "ci", "build", "NONE"}
-	typeEmojis  = map[string]string{
-		"feat": "✨", "fix": "🐛", "docs": "📝", "style": "🎨",
-		"refactor": "🔨", "test": "✅", "chore": "🔧",
-		"ci": "🤖", "build": "🛠️", "NONE": "❌",
+
+	typeEmojis = map[string]string{
+		"feat":     "✨",
+		"fix":      "🐛",
+		"docs":     "📝",
+		"style":    "🎨",
+		"refactor": "🔨",
+		"test":     "✅",
+		"chore":    "🔧",
+		"ci":       "🤖",
+		"build":    "🛠️",
+		"NONE":     "❌",
 	}
 )
 
 const (
 	red    = "\033[1;31m"
 	pink   = "\033[1;35m"
+	brPink = "\033[38;5;213m"
+	yellow = "\033[1;33m"
 	reset  = "\033[0m"
 	cursor = "\033[1;35m█" // pink block
 )
 
-func write(out io.Writer, color, msg string) {
-	fmt.Fprintf(out, color+"%s"+reset+"\n", msg)
+func write(color, msg string) {
+	fmt.Fprintf(os.Stdout, color+"%s"+reset, msg)
+}
+
+func writeln(color, msg string) {
+	write(color, msg+"\n")
+}
+
+func writerr(msg string) error {
+	return fmt.Errorf(red+"%s"+reset, msg)
 }
 
 func showPinkCursor() {
@@ -38,13 +55,6 @@ func showPinkCursor() {
 	fmt.Print("\033[2 q")
 	fmt.Print("\033[?25h")
 }
-
-// ee... it works, so, i think i'll leave it
-// func resetCursor() {
-// 	fmt.Print("\033[?25h")
-// 	fmt.Print("\033[0 q")
-// 	fmt.Print("\033]12;\a")
-// }
 
 func runGit(args ...string) error {
 	cmd := exec.Command("git", args...)
@@ -77,28 +87,32 @@ func getch() (byte, error) {
 	// raw tanpa buffering
 	_ = exec.Command("stty", "-F", "/dev/tty", "raw", "-echo").Run()
 	defer exec.Command("stty", "-F", "/dev/tty", "-raw", "echo").Run()
+
 	b := make([]byte, 1)
 	_, err := os.Stdin.Read(b)
 	return b[0], err
 }
 
 // interactive commit
-func interactiveCommit() error {
+func interactiveCommit(ctx *cli.Context) error {
 	if !isGitRepo() {
-		return fmt.Errorf("💥 not a git repo")
+		return writerr("not a git repo!")
 	}
 	if !hasStaged() {
-		return fmt.Errorf("💥 no staged changes")
+		return writerr("no staged changes")
 	}
 
-	write(os.Stdout, pink, "🌸 fit interactive mode\n")
+	writeln(pink, "🌸 fit interactive mode\n")
 
 	// choose type
 	idx := 0
+
 	fmt.Print(hideCursor)
 	defer fmt.Print(showCursor)
+
 	for {
 		fmt.Print(clearLine)
+
 		for i, t := range commitTypes {
 			if i == idx {
 				fmt.Printf("\033[1;35m▶ %s %s\033[0m\n", typeEmojis[t], t)
@@ -106,10 +120,12 @@ func interactiveCommit() error {
 				fmt.Printf("  %s %s\n", typeEmojis[t], t)
 			}
 		}
+
 		c, _ := getch()
+
 		switch c {
 		case 'q', 3, 17: // q, ^C, ^Q
-			return fmt.Errorf("❌ aborted")
+			return writerr("❌ aborted")
 		case 13: // Enter
 			goto chosen
 		case 27: // arrow escape
@@ -128,57 +144,67 @@ func interactiveCommit() error {
 				}
 			}
 		}
+
 		for range len(commitTypes) {
 			fmt.Print(up)
 		}
 	}
 chosen:
+	var (
+		scope, message, header string
+	)
+
+	reader := bufio.NewReader(os.Stdin)
 	commitType := commitTypes[idx]
 
-	fmt.Print(clearLine)
+	writeln(yellow, clearLine)
 
 	for range len(commitTypes) {
 		fmt.Print(clearLine)
 	}
 
-	var scope string
-
 	fmt.Print("Scope (optional): ")
 
 	showPinkCursor()
 
-	scope, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	scope, _ = reader.ReadString('\n')
 	// resetCursor()
 	scope = strings.TrimSpace(scope)
 
 	// required
-	var message string
 	for {
 		fmt.Print("Message (required): ")
-		message, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+
+		message, _ = reader.ReadString('\n')
 		message = strings.TrimSpace(message)
+
 		if message != "" {
 			break
 		}
-		return fmt.Errorf("%s message cannot be empty %s", red, reset)
+
+		return writerr("message cannot be empty!")
 	}
 
 	// body
 	fmt.Println("Body (optional, empty to skip):")
 	bodyLines := []string{}
+
 	for {
 		showPinkCursor()
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+
+		line, _ := reader.ReadString('\n')
 		line = strings.TrimSuffix(line, "\n")
+
 		if line == "" {
 			break
 		}
+
 		bodyLines = append(bodyLines, line)
 	}
+
 	body := strings.Join(bodyLines, "\n")
 
 	// build commit
-	var header string
 	if commitType == "NONE" {
 		if scope != "" {
 			header = fmt.Sprintf("%s(%s): %s", commitType, scope, message)
@@ -193,16 +219,20 @@ chosen:
 			header = fmt.Sprintf("%s %s: %s", emoji, commitType, message)
 		}
 	}
+
 	full := header
+
 	if body != "" {
 		full = header + "\n\n" + body
 	}
 
-	fmt.Printf("\n📋 preview:\n\033[1;33m%s\033[0m\n\n", full)
-	fmt.Print("\033[38;5;213mCommit? [y/N]:\033[0m ")
-	ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	fmt.Printf("\n📋 preview:\n%s%s%s\n\n", yellow, full, reset)
+	write(brPink, "Commit? [y/N] ")
+
+	ans, _ := reader.ReadString('\n')
+
 	if strings.TrimSpace(strings.ToLower(ans)) != "y" {
-		return fmt.Errorf("❌ cancelled")
+		return writerr("❌ cancelled")
 	}
 
 	return runGit("commit", "-m", full)
@@ -212,7 +242,12 @@ func main() {
 	a := cli.New("fit")
 
 	a.Command("", func(ctx *cli.Context) error {
+		if !isGitRepo() {
+			return writerr("not a git repo\nyou may want to \"git init\" manualy")
+		}
+
 		args := []string{}
+
 		for _, arg := range ctx.Args() {
 			if strings.TrimSpace(arg) != "" {
 				args = append(args, arg)
@@ -222,27 +257,20 @@ func main() {
 		return runGit(append([]string{"commit"}, args...)...)
 	})
 
-	a.Command("m", func(ctx *cli.Context) error {
-		err := interactiveCommit()
-		return err
-	})
+	a.Command("m", interactiveCommit)
 
 	a.Command("edit", func(ctx *cli.Context) error {
 		if !isGitRepo() || !lastCommit() {
-			write(ctx.App.Err, red, "nothing to amend")
-			os.Exit(1)
+			return writerr("nothing to amend")
 		}
-		runGit("commit", "--amend")
-		return nil
+		return runGit("commit", "--amend")
 	})
 
 	a.Command("undo", func(ctx *cli.Context) error {
 		if !isGitRepo() || !lastCommit() {
-			write(ctx.App.Err, red, "nothing to undo")
-			os.Exit(1)
+			return writerr("nothing to undo")
 		}
-		runGit("reset", "--soft", "HEAD~1")
-		return nil
+		return runGit("reset", "--soft", "HEAD~1")
 	})
 
 	a.Run()
