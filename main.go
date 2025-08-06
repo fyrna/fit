@@ -211,9 +211,15 @@ chosen:
 func main() {
 	a := cli.New("fit")
 
-	a.Command("", func(c *cli.Context) error {
-		runGit(append([]string{"commit"}, c.Args()...)...)
-		return nil
+	a.Command("", func(ctx *cli.Context) error {
+		args := []string{}
+		for _, arg := range ctx.Args() {
+			if strings.TrimSpace(arg) != "" {
+				args = append(args, arg)
+			}
+		}
+
+		return runGit(append([]string{"commit"}, args...)...)
 	})
 
 	a.Command("m", func(ctx *cli.Context) error {
